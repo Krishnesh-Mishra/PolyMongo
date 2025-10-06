@@ -32,12 +32,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/polymongo.git"
+    "url": "https://github.com/Krishnesh-Mishra/polymongo"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/polymongo/issues"
+    "url": "https://github.com/Krishnesh-Mishra/polymongo/issues"
   },
-  "homepage": "https://github.com/yourusername/polymongo#readme",
+  "homepage": "https://github.com/Krishnesh-Mishra/polymongo#readme",
   "engines": {
     "node": ">=14.0.0"
   },

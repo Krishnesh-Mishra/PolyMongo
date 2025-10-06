@@ -1,6 +1,9 @@
-import { Model, Query, Aggregate, ChangeStream } from 'mongoose';
+import type { Model } from 'mongoose';
 import { ConnectionManager } from '../core/ConnectionManager';
 import { logger } from '../utils/logger';
+
+// Type for ChangeStream - using any since it's not exported in mongoose types
+type ChangeStream = any;
 
 /**
  * Proxy for handling database selection in query chains
@@ -94,7 +97,7 @@ export class QueryProxy {
     return this.wrapQuery(model => model.create(docs, options));
   }
 
-  async insertMany(docs: any[], options?: any): Promise<any[]> {
+  async insertMany(docs: any[], options?: any): Promise<any> {
     return this.wrapQuery(model => model.insertMany(docs, options));
   }
 

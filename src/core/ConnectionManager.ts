@@ -1,10 +1,14 @@
-import mongoose, { Connection, ChangeStream } from 'mongoose';
-import { ResolvedPolyMongoConfig, ConnectionInfo } from '../types';
+import mongoose from 'mongoose';
+import type { Connection } from 'mongoose';
+import type { ResolvedPolyMongoConfig, ConnectionInfo } from '../types';
 import { MetadataManager } from './MetadataManager';
 import { IEvictionStrategy, EvictionStrategyFactory } from './EvictionStrategy';
 import { ERROR_MESSAGES, PRIORITY, CONNECTION_STATE } from '../utils/constants';
 import { logger } from '../utils/logger';
 import { validateDatabaseName } from '../utils/validators';
+
+// Type for ChangeStream - using any since it's not exported in mongoose types
+type ChangeStream = any;
 
 /**
  * Manages database connections lifecycle

@@ -1,4 +1,7 @@
-import { Connection, ChangeStream } from 'mongoose';
+import type { Connection } from 'mongoose';
+
+// Type for ChangeStream - using any since it's not exported in mongoose types
+type ChangeStream = any;
 
 /**
  * Connection metadata stored in the metadata database
