@@ -14,21 +14,17 @@ import { logger } from '../utils/logger';
  */
 export class PolyMongo {
   private config: ResolvedPolyMongoConfig;
-  private connectionManager: ConnectionManager;
-  private metadataManager: MetadataManager;
+  private connectionManager!: ConnectionManager;
+  private metadataManager!: MetadataManager;
   private initialized = false;
+  private initPromise: Promise<void> | null = null;
 
-  private constructor(config: PolyMongoConfig) {
+  constructor(config: PolyMongoConfig) {
     // Validate configuration
     validateConfig(config);
 
     // Resolve configuration with defaults
     this.config = this.resolveConfig(config);
-
-    // Initialize managers
-    const sanitizedURI = sanitizeMongoURI(this.config.mongoURI);
-    this.metadataManager = new MetadataManager(sanitizedURI, this.config.metadataDB);
-    this.connectionManager = new ConnectionManager(this.config, this.metadataManager);
 
     logger.info('PolyMongo instance created', {
       metadataDB: this.config.metadataDB,
@@ -40,11 +36,31 @@ export class PolyMongo {
 
   /**
    * Create a new PolyMongo wrapper instance
+   * @deprecated Use `new PolyMongo(config)` instead for lazy initialization
    */
   static async createWrapper(config: PolyMongoConfig): Promise<PolyMongo> {
     const instance = new PolyMongo(config);
-    await instance.initialize();
+    await instance.ensureInitialized();
     return instance;
+  }
+
+  /**
+   * Ensure the wrapper is initialized (lazy initialization)
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
+    // If initialization is in progress, wait for it
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    // Start initialization
+    this.initPromise = this.initialize();
+    await this.initPromise;
+    this.initPromise = null;
   }
 
   /**
@@ -57,7 +73,12 @@ export class PolyMongo {
     }
 
     try {
+      const sanitizedURI = sanitizeMongoURI(this.config.mongoURI);
+      this.metadataManager = new MetadataManager(sanitizedURI, this.config.metadataDB);
       await this.metadataManager.initialize();
+      
+      this.connectionManager = new ConnectionManager(this.config, this.metadataManager);
+      
       this.initialized = true;
       logger.info('PolyMongo initialized successfully');
     } catch (error) {
@@ -70,18 +91,23 @@ export class PolyMongo {
    * Wrap a Mongoose model for multi-database support
    */
   wrapModel<T>(model: Model<T>): QueryProxy {
-    if (!this.initialized) {
-      throw new Error('PolyMongo must be initialized before wrapping models');
-    }
-
     logger.debug(`Wrapping model: ${model.modelName}`);
-    return new QueryProxy(model, this.connectionManager, this.config.defaultDB);
+    return new QueryProxy(model, this, this.config.defaultDB);
+  }
+
+  /**
+   * Get connection manager (ensures initialization)
+   */
+  async getConnectionManager(): Promise<ConnectionManager> {
+    await this.ensureInitialized();
+    return this.connectionManager;
   }
 
   /**
    * Set priority for a specific database
    */
   async setPriority(dbName: string, priority: number): Promise<void> {
+    await this.ensureInitialized();
     validatePriority(priority);
     await this.connectionManager.setPriority(dbName, priority);
     logger.info(`Priority set to ${priority} for database: ${dbName}`);
@@ -91,6 +117,7 @@ export class PolyMongo {
    * Manually open a connection to a database
    */
   async openConnection(dbName: string): Promise<void> {
+    await this.ensureInitialized();
     await this.connectionManager.openConnection(dbName);
     logger.info(`Connection opened to database: ${dbName}`);
   }
@@ -99,6 +126,7 @@ export class PolyMongo {
    * Manually close a connection to a database
    */
   async closeConnection(dbName: string): Promise<void> {
+    await this.ensureInitialized();
     await this.connectionManager.closeConnection(dbName);
     logger.info(`Connection closed to database: ${dbName}`);
   }
@@ -107,6 +135,7 @@ export class PolyMongo {
    * Get comprehensive statistics about connections
    */
   async stats(): Promise<PolyMongoStats> {
+    await this.ensureInitialized();
     const connections = this.connectionManager.getAllConnections();
     const managerStats = this.connectionManager.getStats();
     const allMetadata = await this.metadataManager.getAllMetadata();
@@ -226,6 +255,4 @@ export class PolyMongo {
 /**
  * Export convenience method for creating wrapper
  */
-export default {
-  createWrapper: PolyMongo.createWrapper.bind(PolyMongo),
-};
+export default PolyMongo;

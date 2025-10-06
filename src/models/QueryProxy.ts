@@ -1,9 +1,6 @@
 import type { Model } from 'mongoose';
-import { ConnectionManager } from '../core/ConnectionManager';
+import type { PolyMongo } from '../core/PolyMongo';
 import { logger } from '../utils/logger';
-
-// Type for ChangeStream - using any since it's not exported in mongoose types
-type ChangeStream = any;
 
 /**
  * Proxy for handling database selection in query chains
@@ -11,193 +8,68 @@ type ChangeStream = any;
 export class QueryProxy {
   private selectedDB: string | null = null;
   private model: Model<any>;
-  private connectionManager: ConnectionManager;
+  private wrapper: PolyMongo;
   private defaultDB: string;
 
   constructor(
     model: Model<any>,
-    connectionManager: ConnectionManager,
+    wrapper: PolyMongo,
     defaultDB: string
   ) {
     this.model = model;
-    this.connectionManager = connectionManager;
+    this.wrapper = wrapper;
     this.defaultDB = defaultDB;
-  }
 
-  /**
-   * Select database for the next query
-   */
-  db(dbName: string): this {
-    this.selectedDB = dbName;
-    return this;
-  }
+    // Return a Proxy that intercepts all method calls
+    return new Proxy(this, {
+      get(target, prop, receiver) {
+        // Handle 'db' method specially
+        if (prop === 'db') {
+          return (dbName: string) => {
+            target.selectedDB = dbName;
+            return receiver;
+          };
+        }
 
-  /**
-   * Get the model bound to the selected database
-   */
-  private async getModelForDB(): Promise<Model<any>> {
-    const dbName = this.selectedDB || this.defaultDB;
-    const connection = await this.connectionManager.getConnection(dbName);
-    
-    // Reset selected DB after use
-    this.selectedDB = null;
-    
-    return connection.model(this.model.modelName, this.model.schema);
-  }
+        // For all other properties/methods, return a function that:
+        // 1. Gets the model for the selected DB
+        // 2. Calls the method on that model
+        // 3. Returns the result (which might be a Query with chainable methods)
+        const originalProp = Reflect.get(target, prop, receiver);
+        
+        if (typeof originalProp !== 'undefined') {
+          return originalProp;
+        }
 
-  /**
-   * Wrap a query to use the selected database
-   */
-  private async wrapQuery<T>(queryFn: (model: Model<any>) => T): Promise<T> {
-    const model = await this.getModelForDB();
-    return queryFn(model);
-  }
-
-  // ============================================
-  // Query Methods
-  // ============================================
-
-  async find(filter?: any, projection?: any, options?: any): Promise<any[]> {
-    return this.wrapQuery(model => model.find(filter, projection, options));
-  }
-
-  async findOne(filter?: any, projection?: any, options?: any): Promise<any> {
-    return this.wrapQuery(model => model.findOne(filter, projection, options));
-  }
-
-  async findById(id: any, projection?: any, options?: any): Promise<any> {
-    return this.wrapQuery(model => model.findById(id, projection, options));
-  }
-
-  async findByIdAndUpdate(id: any, update: any, options?: any): Promise<any> {
-    return this.wrapQuery(model => model.findByIdAndUpdate(id, update, options));
-  }
-
-  async findByIdAndDelete(id: any, options?: any): Promise<any> {
-    return this.wrapQuery(model => model.findByIdAndDelete(id, options));
-  }
-
-  async findOneAndUpdate(filter: any, update: any, options?: any): Promise<any> {
-    return this.wrapQuery(model => model.findOneAndUpdate(filter, update, options));
-  }
-
-  async findOneAndDelete(filter: any, options?: any): Promise<any> {
-    return this.wrapQuery(model => model.findOneAndDelete(filter, options));
-  }
-
-  async findOneAndReplace(filter: any, replacement: any, options?: any): Promise<any> {
-    return this.wrapQuery(model => model.findOneAndReplace(filter, replacement, options));
-  }
-
-  // ============================================
-  // Create/Insert Methods
-  // ============================================
-
-  async create(docs: any | any[], options?: any): Promise<any> {
-    return this.wrapQuery(model => model.create(docs, options));
-  }
-
-  async insertMany(docs: any[], options?: any): Promise<any> {
-    return this.wrapQuery(model => model.insertMany(docs, options));
-  }
-
-  // ============================================
-  // Update Methods
-  // ============================================
-
-  async updateOne(filter: any, update: any, options?: any): Promise<any> {
-    return this.wrapQuery(model => model.updateOne(filter, update, options));
-  }
-
-  async updateMany(filter: any, update: any, options?: any): Promise<any> {
-    return this.wrapQuery(model => model.updateMany(filter, update, options));
-  }
-
-  async replaceOne(filter: any, replacement: any, options?: any): Promise<any> {
-    return this.wrapQuery(model => model.replaceOne(filter, replacement, options));
-  }
-
-  // ============================================
-  // Delete Methods
-  // ============================================
-
-  async deleteOne(filter: any, options?: any): Promise<any> {
-    return this.wrapQuery(model => model.deleteOne(filter, options));
-  }
-
-  async deleteMany(filter: any, options?: any): Promise<any> {
-    return this.wrapQuery(model => model.deleteMany(filter, options));
-  }
-
-  // ============================================
-  // Count/Exists Methods
-  // ============================================
-
-  async countDocuments(filter?: any, options?: any): Promise<number> {
-    return this.wrapQuery(model => model.countDocuments(filter, options));
-  }
-
-  async estimatedDocumentCount(options?: any): Promise<number> {
-    return this.wrapQuery(model => model.estimatedDocumentCount(options));
-  }
-
-  async exists(filter: any): Promise<boolean> {
-    return this.wrapQuery(async model => {
-      const result = await model.exists(filter);
-      return !!result;
+        // If the property doesn't exist on QueryProxy, assume it's a Mongoose method
+        return function(...args: any[]) {
+          return target.executeOnModel(prop as string, args);
+        };
+      }
     });
   }
 
-  // ============================================
-  // Aggregation
-  // ============================================
-
-  async aggregate(pipeline?: any[], options?: any): Promise<any[]> {
-    return this.wrapQuery(model => model.aggregate(pipeline, options));
-  }
-
-  // ============================================
-  // Distinct
-  // ============================================
-
-  async distinct(field: string, filter?: any): Promise<any[]> {
-    return this.wrapQuery(model => model.distinct(field, filter));
-  }
-
-  // ============================================
-  // Watch (Change Streams)
-  // ============================================
-
-  async watch(pipeline?: any[], options?: any): Promise<ChangeStream> {
+  /**
+   * Execute a method on the model for the selected database
+   */
+  private async executeOnModel(method: string, args: any[]): Promise<any> {
     const dbName = this.selectedDB || this.defaultDB;
-    const model = await this.getModelForDB();
-    
-    const stream = model.watch(pipeline, options);
-    
-    // Register with connection manager
-    this.connectionManager.registerWatchStream(dbName, stream);
-    
-    logger.info(`Watch stream created for ${this.model.modelName} in ${dbName}`);
-    
-    return stream;
-  }
+    this.selectedDB = null; // Reset after capturing
 
-  // ============================================
-  // Bulk Operations
-  // ============================================
+    const connectionManager = await this.wrapper.getConnectionManager();
+    const connection = await connectionManager.getConnection(dbName);
+    const model = connection.model(this.model.modelName, this.model.schema);
 
-  async bulkWrite(operations: any[], options?: any): Promise<any> {
-    return this.wrapQuery(model => model.bulkWrite(operations, options));
-  }
+    // Check if it's a special method that needs watch stream registration
+    if (method === 'watch') {
+      const stream = (model as any)[method](...args);
+      connectionManager.registerWatchStream(dbName, stream);
+      logger.info(`Watch stream created for ${this.model.modelName} in ${dbName}`);
+      return stream;
+    }
 
-  // ============================================
-  // Validation
-  // ============================================
-
-  async validate(doc: any, pathsToValidate?: string[]): Promise<void> {
-    return this.wrapQuery(model => {
-      const instance = new model(doc);
-      return instance.validate(pathsToValidate);
-    });
+    // Call the method on the model
+    const result = (model as any)[method](...args);
+    return result;
   }
 }

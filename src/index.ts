@@ -52,23 +52,6 @@ export {
   ERROR_MESSAGES,
 } from './utils/constants';
 
-// Default export - convenience wrapper
+// Default export
 import { PolyMongo } from './core/PolyMongo';
-
-export default {
-  /**
-   * Create a new PolyMongo wrapper instance
-   * 
-   * @example
-   * ```typescript
-   * import PolyMongo from 'polymongo';
-   * 
-   * const wrapper = await PolyMongo.createWrapper({
-   *   mongoURI: 'mongodb://localhost:27017',
-   *   maxConnections: 10,
-   *   evictionType: 'LRU'
-   * });
-   * ```
-   */
-  createWrapper: PolyMongo.createWrapper.bind(PolyMongo),
-};
+export default PolyMongo;
