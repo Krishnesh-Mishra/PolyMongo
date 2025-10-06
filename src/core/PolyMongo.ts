@@ -1,12 +1,14 @@
-import type { Model } from 'mongoose';
+// In src/core/PolyMongo.ts
+import { Model } from 'mongoose';
 import type { PolyMongoConfig, ResolvedPolyMongoConfig, PolyMongoStats, DatabaseStats } from '../types';
 import { ConnectionManager } from './ConnectionManager';
 import { MetadataManager } from './MetadataManager';
 import { LRUEvictionStrategy } from './EvictionStrategy';
-import { QueryProxy } from '../models/QueryProxy';
+import { QueryProxy, WrappedModel } from '../models/QueryProxy'; // Ensure single import
 import { DEFAULT_CONFIG, CONNECTION_STATE } from '../utils/constants';
 import { validateConfig, validatePriority, sanitizeMongoURI } from '../utils/validators';
 import { logger } from '../utils/logger';
+
 
 /**
  * Main PolyMongo wrapper class
@@ -47,21 +49,21 @@ export class PolyMongo {
   /**
    * Ensure the wrapper is initialized (lazy initialization)
    */
-  private async ensureInitialized(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
-
-    // If initialization is in progress, wait for it
-    if (this.initPromise) {
-      return this.initPromise;
-    }
-
-    // Start initialization
-    this.initPromise = this.initialize();
-    await this.initPromise;
-    this.initPromise = null;
+  public async ensureInitialized(): Promise<void> {
+  if (this.initialized) {
+    return;
   }
+
+  // If initialization is in progress, wait for it
+  if (this.initPromise) {
+    return this.initPromise;
+  }
+
+  // Start initialization
+  this.initPromise = this.initialize();
+  await this.initPromise;
+  this.initPromise = null;
+}
 
   /**
    * Initialize the wrapper
@@ -90,11 +92,11 @@ export class PolyMongo {
   /**
    * Wrap a Mongoose model for multi-database support
    */
-  wrapModel<T>(model: Model<T>): QueryProxy {
-    logger.debug(`Wrapping model: ${model.modelName}`);
-    return new QueryProxy(model, this, this.config.defaultDB);
-  }
-
+// Update wrapModel method
+wrapModel<T>(model: Model<T>): WrappedModel<T> {
+  logger.debug(`Wrapping model: ${model.modelName}`);
+  return new QueryProxy<T>(model, this, this.config.defaultDB);
+}
   /**
    * Get connection manager (ensures initialization)
    */

@@ -35,6 +35,7 @@ app.get('/view-user/:db', async (req, res) => {
   try {
     const { db } = req.params;
     const users = await User.db(db).find().lean();
+
     res.json(users);
   } catch (err) {
     res.status(500).json({ error: err.message });

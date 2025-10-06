@@ -1,75 +1,120 @@
-import type { Model } from 'mongoose';
+import { Model, Query, Aggregate } from 'mongoose';
 import type { PolyMongo } from '../core/PolyMongo';
 import { logger } from '../utils/logger';
 
 /**
- * Proxy for handling database selection in query chains
+ * Create proxy for handling database-specific execution in query chains
  */
-export class QueryProxy {
-  private selectedDB: string | null = null;
-  private model: Model<any>;
-  private wrapper: PolyMongo;
-  private defaultDB: string;
+function createChainProxy<Target extends Query<any, any> | Aggregate<any>>(
+  target: Target,
+  wrapper: PolyMongo,
+  dbName: string
+): Target {
+  const handler = {
+    get(proxyTarget: { target: Target; wrapper: PolyMongo; dbName: string }, prop: string | symbol, receiver: any) {
+      const value = Reflect.get(proxyTarget.target, prop);
 
-  constructor(
-    model: Model<any>,
-    wrapper: PolyMongo,
-    defaultDB: string
-  ) {
-    this.model = model;
-    this.wrapper = wrapper;
-    this.defaultDB = defaultDB;
+      if (typeof value === 'function') {
+        return (...args: any[]) => {
+          if (['exec', 'then', 'catch', 'finally'].includes(prop as string)) {
+            return (async () => {
+              await proxyTarget.wrapper.ensureInitialized();
+              const connManager = await proxyTarget.wrapper.getConnectionManager();
+              const connection = await connManager.getConnection(proxyTarget.dbName);
 
-    // Return a Proxy that intercepts all method calls
-    return new Proxy(this, {
-      get(target, prop, receiver) {
-        // Handle 'db' method specially
-        if (prop === 'db') {
-          return (dbName: string) => {
-            target.selectedDB = dbName;
-            return receiver;
-          };
-        }
+              let model;
+              if (proxyTarget.target instanceof Query) {
+                model = proxyTarget.target.model;
+              } else if (proxyTarget.target instanceof Aggregate) {
+                model = (proxyTarget.target as any)._model;
+              } else {
+                throw new Error('Unsupported target type');
+              }
 
-        // For all other properties/methods, return a function that:
-        // 1. Gets the model for the selected DB
-        // 2. Calls the method on that model
-        // 3. Returns the result (which might be a Query with chainable methods)
-        const originalProp = Reflect.get(target, prop, receiver);
-        
-        if (typeof originalProp !== 'undefined') {
-          return originalProp;
-        }
+              const dbModel = connection.model(model.modelName, model.schema);
 
-        // If the property doesn't exist on QueryProxy, assume it's a Mongoose method
-        return function(...args: any[]) {
-          return target.executeOnModel(prop as string, args);
+              if (proxyTarget.target instanceof Query) {
+                (proxyTarget.target as any)._collection = dbModel.collection; // Type assertion
+              } else if (proxyTarget.target instanceof Aggregate) {
+                (proxyTarget.target as any)._model = dbModel; // Type assertion
+              }
+
+              return value.apply(proxyTarget.target, args);
+            })();
+          } else {
+            const result = value.apply(proxyTarget.target, args);
+            // Return new proxy for chainable methods that return Query or Aggregate
+            if (result instanceof Query || result instanceof Aggregate) {
+              return createChainProxy(result, proxyTarget.wrapper, proxyTarget.dbName);
+            }
+            // Return receiver for methods that return the same Query instance (e.g., where(), select())
+            if (result === proxyTarget.target) {
+              return receiver;
+            }
+            // Return result for non-chainable methods
+            return result;
+          }
         };
       }
-    });
-  }
-
-  /**
-   * Execute a method on the model for the selected database
-   */
-  private async executeOnModel(method: string, args: any[]): Promise<any> {
-    const dbName = this.selectedDB || this.defaultDB;
-    this.selectedDB = null; // Reset after capturing
-
-    const connectionManager = await this.wrapper.getConnectionManager();
-    const connection = await connectionManager.getConnection(dbName);
-    const model = connection.model(this.model.modelName, this.model.schema);
-
-    // Check if it's a special method that needs watch stream registration
-    if (method === 'watch') {
-      const stream = (model as any)[method](...args);
-      connectionManager.registerWatchStream(dbName, stream);
-      logger.info(`Watch stream created for ${this.model.modelName} in ${dbName}`);
-      return stream;
+      return value;
     }
+  };
 
-    // Call the method on the model
-    const result = (model as any)[method](...args);
-    return result;
-  }
+  return new Proxy({ target, wrapper, dbName }, handler) as unknown as Target;
 }
+
+/**
+ * Proxy for handling database selection and model methods
+ */
+export const QueryProxy = function<T = any>(
+  model: Model<T>,
+  wrapper: PolyMongo,
+  defaultDB: string
+): WrappedModel<T> {
+  const handler = {
+    get(proxyTarget: { selectedDB: string | null; model: Model<T>; wrapper: PolyMongo; defaultDB: string }, prop: string | symbol, receiver: any) {
+      if (prop === 'db') {
+        return (dbName: string) => {
+          proxyTarget.selectedDB = dbName;
+          return receiver;
+        };
+      }
+
+      if (prop === 'selectedDB' || prop === 'model' || prop === 'wrapper' || prop === 'defaultDB') {
+        return Reflect.get(proxyTarget, prop);
+      }
+
+      return (...args: any[]) => {
+        return (async () => {
+          await proxyTarget.wrapper.ensureInitialized();
+          const dbName = proxyTarget.selectedDB || proxyTarget.defaultDB;
+          proxyTarget.selectedDB = null;
+          const connectionManager = await proxyTarget.wrapper.getConnectionManager();
+          const connection = await connectionManager.getConnection(dbName);
+          const dbModel = connection.model<T>(proxyTarget.model.modelName, proxyTarget.model.schema);
+
+          const tempResult = (dbModel as any)[prop](...args);
+
+          if (tempResult instanceof Query || tempResult instanceof Aggregate) {
+            return createChainProxy(tempResult, proxyTarget.wrapper, dbName);
+          }
+
+          if (prop === 'watch') {
+            const stream = tempResult;
+            connectionManager.registerWatchStream(dbName, stream);
+            logger.info(`Watch stream created for ${proxyTarget.model.modelName} in ${dbName}`);
+            return stream;
+          }
+
+          return tempResult;
+        })();
+      };
+    }
+  };
+
+  return new Proxy({ selectedDB: null, model, wrapper, defaultDB }, handler) as unknown as WrappedModel<T>;
+} as unknown as { new <T = any>(model: Model<T>, wrapper: PolyMongo, defaultDB: string): WrappedModel<T> };
+
+export type WrappedModel<T> = Model<T> & {
+  db(dbName: string): WrappedModel<T>;
+};
